@@ -1,3 +1,4 @@
+
 name: Build Euro Haul Android APK
 
 on:
@@ -11,15 +12,22 @@ jobs:
       - name: Download repository files
         uses: actions/checkout@v4
 
-      - name: Extract game ZIP
+      - name: Extract game ZIP and locate project
         run: |
           mkdir project
           unzip -q Euro_Haul_Offline_Expanded_Project.zip -d project
-          test -f project/project.godot
+          PROJECT_FILE=$(find project -name project.godot -type f -print -quit)
+          if [ -z "$PROJECT_FILE" ]; then
+            echo "ERROR: project.godot not found in ZIP"
+            exit 1
+          fi
+          PROJECT_DIR=$(dirname "$PROJECT_FILE")
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Found project at $PROJECT_DIR"
 
       - name: Create Android export preset
         run: |
-          cat > project/export_presets.cfg <<'EOF'
+          cat > "$PROJECT_DIR/export_presets.cfg" <<'EOF'
           [preset.0]
           name="Android"
           platform="Android"
@@ -57,7 +65,7 @@ jobs:
         with:
           godot_executable_download_url: https://downloads.tuxfamily.org/godotengine/4.7.2/Godot_v4.7.2-stable_linux.x86_64.zip
           godot_export_templates_download_url: https://downloads.tuxfamily.org/godotengine/4.7.2/Godot_v4.7.2-stable_export_templates.tpz
-          relative_project_path: ./project
+          relative_project_path: ./${{ env.PROJECT_DIR }}
           presets_to_export: Android
           use_preset_export_path: true
 
@@ -65,4 +73,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Euro-Haul-APK
-          path: project/build/EuroHaul.apk
+          path: ${{ env.PROJECT_DIR }}/build/EuroHaul.apk
+          
