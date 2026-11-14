@@ -54,9 +54,39 @@ jobs:
           sdkmanager --list_installed
           adb version
 
-      - name: Create Android export preset
+      - name: Configure Godot Android project
         shell: bash
         run: |
+          set -e
+
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          project = Path(os.environ["PROJECT_DIR"]) / "project.godot"
+          content = project.read_text()
+
+          setting = "textures/vram_compression/import_etc2_astc"
+          pattern = re.compile(
+              r"(?m)^" + re.escape(setting) + r"\s*=.*$"
+          )
+
+          if pattern.search(content):
+              content = pattern.sub(setting + "=true", content)
+          elif "[rendering]" in content:
+              content = content.replace(
+                  "[rendering]",
+                  "[rendering]\n" + setting + "=true",
+                  1
+              )
+          else:
+              content += "\n[rendering]\n" + setting + "=true\n"
+
+          project.write_text(content)
+          print("Enabled ETC2/ASTC texture compression.")
+          PY
+
           mkdir -p "$PROJECT_DIR/build"
 
           cat > "$PROJECT_DIR/export_presets.cfg" <<'EOF'
@@ -64,7 +94,11 @@ jobs:
           name="Android"
           platform="Android"
           runnable=true
+          dedicated_server=false
+          custom_features=""
           export_filter="all_resources"
+          include_filter=""
+          exclude_filter=""
           export_path="build/EuroHaul.apk"
           script_export_mode=2
 
@@ -89,19 +123,28 @@ jobs:
           presets_to_export: Android
           use_preset_export_path: true
 
-      - name: Check APK output
+      - name: Find and prepare APK
         shell: bash
         run: |
           set -e
-          APK="$PROJECT_DIR/build/EuroHaul.apk"
 
-          if [ ! -f "$APK" ]; then
-            echo "ERROR: APK was not generated."
+          mkdir -p "$PROJECT_DIR/build"
+
+          APK=$(find "$HOME/.local/share/godot/builds" "$PROJECT_DIR/build" \
+            -type f -name "*.apk" -print -quit 2>/dev/null || true)
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: No APK was generated."
             find "$PROJECT_DIR" -name "*.apk" -type f
             exit 1
           fi
 
-          ls -lh "$APK"
+          if [ "$APK" != "$PROJECT_DIR/build/EuroHaul.apk" ]; then
+            cp "$APK" "$PROJECT_DIR/build/EuroHaul.apk"
+          fi
+
+          echo "APK successfully found:"
+          ls -lh "$PROJECT_DIR/build/EuroHaul.apk"
 
       - name: Upload installable APK
         uses: actions/upload-artifact@v4
@@ -110,3 +153,4 @@ jobs:
           path: ${{ env.PROJECT_DIR }}/build/EuroHaul.apk
           if-no-files-found: error
           retention-days: 7
+          
