@@ -32,7 +32,7 @@ jobs:
 
           PROJECT_DIR=$(dirname "$PROJECT_FILE")
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Godot project found at: $PROJECT_DIR"
+          echo "Project found: $PROJECT_DIR"
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -46,15 +46,27 @@ jobs:
           accept-android-sdk-licenses: true
           packages: "platform-tools platforms;android-35 build-tools;35.0.1"
 
-      - name: Verify Android SDK
+      - name: Create temporary APK signing key
         shell: bash
         run: |
           set -e
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          sdkmanager --list_installed
-          adb version
 
-      - name: Configure Godot Android project
+          PASSWORD=$(openssl rand -hex 16)
+          echo "EUROHAUL_KEYSTORE_PASSWORD=$PASSWORD" >> "$GITHUB_ENV"
+
+          keytool -genkeypair -v \
+            -keystore "$RUNNER_TEMP/eurohaul-release.keystore" \
+            -storepass "$PASSWORD" \
+            -keypass "$PASSWORD" \
+            -alias eurohaul \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Euro Haul, O=Euro Haul, L=Nairobi, C=KE"
+
+          echo "Temporary signing key created."
+
+      - name: Configure Godot project and app icon
         shell: bash
         run: |
           set -e
@@ -64,27 +76,46 @@ jobs:
           import re
           from pathlib import Path
 
-          project = Path(os.environ["PROJECT_DIR"]) / "project.godot"
+          root = Path(os.environ["PROJECT_DIR"])
+          project = root / "project.godot"
           content = project.read_text()
 
-          setting = "textures/vram_compression/import_etc2_astc"
-          pattern = re.compile(
-              r"(?m)^" + re.escape(setting) + r"\s*=.*$"
-          )
+          icon = root / "icon.svg"
+          icon.write_text("""<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+          <rect width="512" height="512" rx="90" fill="#172b3d"/>
+          <path d="M55 160h235v175H55z" fill="#e9a52b"/>
+          <path d="M290 220h90l77 85v30H290z" fill="#e9a52b"/>
+          <path d="M315 240h52l48 53H315z" fill="#b9e0ed"/>
+          <circle cx="145" cy="354" r="43" fill="#111820"/>
+          <circle cx="145" cy="354" r="19" fill="#d7dce0"/>
+          <circle cx="365" cy="354" r="43" fill="#111820"/>
+          <circle cx="365" cy="354" r="19" fill="#d7dce0"/>
+          <path d="M75 190h190v22H75z" fill="#fff0c9"/>
+          </svg>""")
 
-          if pattern.search(content):
-              content = pattern.sub(setting + "=true", content)
-          elif "[rendering]" in content:
-              content = content.replace(
-                  "[rendering]",
-                  "[rendering]\n" + setting + "=true",
-                  1
+          def set_setting(section, key, value):
+              global content
+              match = re.search(
+                  r"(?ms)^\[" + re.escape(section) + r"\]\s*$.*?(?=^\[|\Z)",
+                  content
               )
-          else:
-              content += "\n[rendering]\n" + setting + "=true\n"
+              line = f'{key}={value}'
+              if match:
+                  block = match.group(0)
+                  pattern = r"(?m)^" + re.escape(key) + r"\s*=.*$"
+                  if re.search(pattern, block):
+                      block = re.sub(pattern, line, block)
+                  else:
+                      block = block.rstrip() + "\n" + line + "\n"
+                  content = content[:match.start()] + block + content[match.end():]
+              else:
+                  content += f"\n[{section}]\n{line}\n"
+
+          set_setting("application", "config/icon", '"res://icon.svg"')
+          set_setting("rendering", "textures/vram_compression/import_etc2_astc", "true")
 
           project.write_text(content)
-          print("Enabled ETC2/ASTC texture compression.")
+          print("Application icon and ETC2/ASTC configured.")
           PY
 
           mkdir -p "$PROJECT_DIR/build"
@@ -116,6 +147,10 @@ jobs:
 
       - name: Export Android APK with Godot
         uses: firebelley/godot-export@v8.0.0
+        env:
+          GODOT_ANDROID_KEYSTORE_RELEASE_PATH: ${{ runner.temp }}/eurohaul-release.keystore
+          GODOT_ANDROID_KEYSTORE_RELEASE_USER: eurohaul
+          GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD: ${{ env.EUROHAUL_KEYSTORE_PASSWORD }}
         with:
           godot_executable_download_url: https://downloads.godotengine.org/?flavor=stable&platform=linux.64&slug=linux.x86_64.zip&version=4.7.2
           godot_export_templates_download_url: https://downloads.godotengine.org/?flavor=stable&platform=templates&slug=export_templates.tpz&version=4.7.2
@@ -127,7 +162,6 @@ jobs:
         shell: bash
         run: |
           set -e
-
           mkdir -p "$PROJECT_DIR/build"
 
           APK=$(find "$HOME/.local/share/godot/builds" "$PROJECT_DIR/build" \
@@ -139,11 +173,9 @@ jobs:
             exit 1
           fi
 
-          if [ "$APK" != "$PROJECT_DIR/build/EuroHaul.apk" ]; then
-            cp "$APK" "$PROJECT_DIR/build/EuroHaul.apk"
-          fi
+          cp "$APK" "$PROJECT_DIR/build/EuroHaul.apk"
 
-          echo "APK successfully found:"
+          echo "APK generated successfully:"
           ls -lh "$PROJECT_DIR/build/EuroHaul.apk"
 
       - name: Upload installable APK
@@ -153,4 +185,3 @@ jobs:
           path: ${{ env.PROJECT_DIR }}/build/EuroHaul.apk
           if-no-files-found: error
           retention-days: 7
-          
